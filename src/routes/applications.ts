@@ -2,10 +2,17 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 import { db } from "../db";
-import { applications, candidates, jobs, stageHistory } from "../db/schema";
+import {
+  applications,
+  candidates,
+  jobs,
+  companies,
+  stageHistory,
+} from "../db/schema";
 import { requireAuth } from "../middleware/auth";
 import { uploadCV } from "../lib/cloudinary";
 import { enqueueCvScoring } from "../lib/queue";
+import { sendStageEmail } from "../lib/email";
 import {
   submitApplicationSchema,
   updateStageSchema,
@@ -73,8 +80,12 @@ applicationRoutes.post("/:jobId", async (c) => {
       requirements: jobs.requirements,
       status: jobs.status,
       closesAt: jobs.closesAt,
+      company: {
+        name: companies.name,
+      },
     })
     .from(jobs)
+    .innerJoin(companies, eq(jobs.companyId, companies.id))
     .where(eq(jobs.id, jobId))
     .limit(1);
 
@@ -191,6 +202,17 @@ applicationRoutes.post("/:jobId", async (c) => {
     jobDescription: job.description,
     requirements: job.requirements ?? null,
   });
+
+  // Send confirmation email — fire and forget, don't block the response
+  sendStageEmail({
+    candidateFirstName: candidate.firstName,
+    candidateEmail: candidate.email,
+    jobTitle: job.title,
+    companyName: job.company.name,
+    stage: "applied",
+  }).catch((err) =>
+    console.error("[Email] Failed to send application confirmation:", err),
+  );
 
   return c.json(
     {
@@ -347,15 +369,21 @@ applicationRoutes.patch(
     const { id } = c.req.param();
     const { stage, note } = c.req.valid("json");
 
-    // Verify ownership through the job
+    // Verify ownership through the job — also fetch data needed for emails
     const [row] = await db
       .select({
         applicationId: applications.id,
         currentStage: applications.stage,
         jobCompanyId: jobs.companyId,
+        jobTitle: jobs.title,
+        companyName: companies.name,
+        candidateFirstName: candidates.firstName,
+        candidateEmail: candidates.email,
       })
       .from(applications)
       .innerJoin(jobs, eq(applications.jobId, jobs.id))
+      .innerJoin(companies, eq(jobs.companyId, companies.id))
+      .innerJoin(candidates, eq(applications.candidateId, candidates.id))
       .where(and(eq(applications.id, id), eq(jobs.companyId, sub)))
       .limit(1);
 
@@ -387,6 +415,17 @@ applicationRoutes.patch(
       changedBy: sub,
       note: note ?? null,
     });
+
+    // Notify candidate — fire and forget
+    sendStageEmail({
+      candidateFirstName: row.candidateFirstName,
+      candidateEmail: row.candidateEmail,
+      jobTitle: row.jobTitle,
+      companyName: row.companyName,
+      stage,
+    }).catch((err) =>
+      console.error(`[Email] Failed to send stage email (${stage}):`, err),
+    );
 
     return c.json({
       success: true,
