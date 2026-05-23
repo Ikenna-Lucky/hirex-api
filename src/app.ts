@@ -1,0 +1,60 @@
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { logger } from "hono/logger";
+import { prettyJSON } from "hono/pretty-json";
+import { secureHeaders } from "hono/secure-headers";
+
+// Route imports (to be wired up as each module is built)
+import authRoutes from "./routes/auth";
+import jobRoutes from "./routes/jobs";
+import applicationRoutes from "./routes/applications";
+import candidateRoutes from "./routes/candidates";
+import subscriptionRoutes from "./routes/subscriptions";
+import webhookRoutes from "./routes/webhooks";
+
+const app = new Hono().basePath("/api");
+
+// ─── Global Middleware ─────────────────────────────────
+app.use("*", logger());
+app.use("*", prettyJSON());
+app.use("*", secureHeaders());
+app.use(
+  "*",
+  cors({
+    origin: [
+      process.env.FRONTEND_URL || "http://localhost:3000",
+    ],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+  })
+);
+
+// ─── Health Check ──────────────────────────────────────
+app.get("/health", (c) =>
+  c.json({ status: "ok", service: "HireX API", timestamp: new Date().toISOString() })
+);
+
+// ─── Routes ───────────────────────────────────────────
+app.route("/auth", authRoutes);
+app.route("/jobs", jobRoutes);
+app.route("/applications", applicationRoutes);
+app.route("/candidates", candidateRoutes);
+app.route("/subscriptions", subscriptionRoutes);
+app.route("/webhooks", webhookRoutes);
+
+// ─── 404 Handler ──────────────────────────────────────
+app.notFound((c) =>
+  c.json({ success: false, message: "Route not found" }, 404)
+);
+
+// ─── Error Handler ────────────────────────────────────
+app.onError((err, c) => {
+  console.error(`[HireX API Error]`, err);
+  return c.json(
+    { success: false, message: err.message || "Internal server error" },
+    500
+  );
+});
+
+export default app;
