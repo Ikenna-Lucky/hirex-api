@@ -9,8 +9,7 @@ export const config = {
   },
 
   redis: {
-    url: process.env.UPSTASH_REDIS_URL || "",
-    token: process.env.UPSTASH_REDIS_TOKEN || "",
+    url: process.env.REDIS_URL || "",
   },
 
   cloudinary: {
