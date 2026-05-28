@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { eq, count } from "drizzle-orm";
 import { db } from "../db";
-import { subscriptions, companies } from "../db/schema";
+import { subscriptions, companies, jobs } from "../db/schema";
 import { requireAuth } from "../middleware/auth";
 import {
   PLANS,
@@ -38,23 +38,37 @@ subscriptionRoutes.use("*", requireAuth);
 subscriptionRoutes.get("/status", async (c) => {
   const { sub } = c.get("company");
 
-  const [subscription] = await db
-    .select()
-    .from(subscriptions)
-    .where(eq(subscriptions.companyId, sub))
-    .limit(1);
+  const [[subscription], [{ jobsUsed }]] = await Promise.all([
+    db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.companyId, sub))
+      .limit(1),
+
+    db.select({ jobsUsed: count() }).from(jobs).where(eq(jobs.companyId, sub)),
+  ]);
 
   if (!subscription) {
     return c.json({ success: false, message: "No subscription found" }, 404);
   }
 
   const plan = PLANS[subscription.plan as PlanKey] ?? null;
+  const isActive = subscription.status === "active";
+  const FREE_LIMIT = 1;
 
   return c.json({
     success: true,
     data: {
       status: subscription.status,
       plan: subscription.plan,
+      isActive,
+
+      // Free-tier quota info (always present so the UI can render usage)
+      freeLimit: FREE_LIMIT,
+      jobsUsed: Number(jobsUsed),
+      quotaLeft: isActive ? null : Math.max(0, FREE_LIMIT - Number(jobsUsed)),
+      quotaExhausted: !isActive && Number(jobsUsed) >= FREE_LIMIT,
+
       planDetails: plan
         ? {
             name: plan.name,
@@ -65,7 +79,6 @@ subscriptionRoutes.get("/status", async (c) => {
         : null,
       currentPeriodStart: subscription.currentPeriodStart,
       currentPeriodEnd: subscription.currentPeriodEnd,
-      isActive: subscription.status === "active",
     },
   });
 });

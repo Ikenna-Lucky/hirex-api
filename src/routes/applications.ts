@@ -280,6 +280,8 @@ applicationRoutes.get("/job/:jobId", async (c) => {
         scoringStatus: applications.scoringStatus,
         cvUrl: applications.cvUrl,
         coverLetter: applications.coverLetter,
+        notes: applications.notes,
+        scoredAt: applications.scoredAt,
         createdAt: applications.createdAt,
         candidate: {
           id: candidates.id,

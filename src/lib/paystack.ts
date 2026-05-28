@@ -87,7 +87,7 @@ export async function initializeTransaction(
     email,
     amount: plan.amountKobo,
     currency: "NGN",
-    callback_url: `${process.env.FRONTEND_URL}/billing/verify`,
+    callback_url: `${process.env.FRONTEND_URL}/dashboard/billing`,
     metadata: {
       companyId,
       plan: planKey,

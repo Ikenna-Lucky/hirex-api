@@ -1,9 +1,8 @@
-import { serve } from "hono/bun";
 import app from "./app";
 
 const PORT = Number(process.env.PORT) || 3001;
 
-serve({
+Bun.serve({
   fetch: app.fetch,
   port: PORT,
 });
