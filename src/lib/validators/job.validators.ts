@@ -1,5 +1,22 @@
 import { z } from "zod";
 
+/**
+ * Accepts either a full ISO-8601 datetime ("2025-01-01T00:00:00Z")
+ * or a plain date string ("2025-01-01") from the frontend date picker.
+ * Both are converted to a Date-safe ISO string internally.
+ */
+const closesAtSchema = z
+  .string()
+  .optional()
+  .refine(
+    (val) => {
+      if (!val) return true;
+      const d = new Date(val);
+      return !isNaN(d.getTime());
+    },
+    { message: "closesAt must be a valid date (YYYY-MM-DD or ISO 8601)" },
+  );
+
 // Base schema without refinement so .partial() works on updateJobSchema
 const baseJobSchema = z.object({
   title: z.string().min(3, "Job title must be at least 3 characters"),
@@ -13,18 +30,37 @@ const baseJobSchema = z.object({
     .enum(["full-time", "part-time", "contract", "remote", "hybrid"])
     .optional(),
   salaryMin: z
-    .number()
-    .positive("Minimum salary must be a positive number")
+    .union([
+      z.number(),
+      z.string().transform((v) => (v === "" ? undefined : Number(v))),
+    ])
+    .pipe(
+      z
+        .number()
+        .positive("Minimum salary must be a positive number")
+        .optional(),
+    )
     .optional(),
   salaryMax: z
-    .number()
-    .positive("Maximum salary must be a positive number")
+    .union([
+      z.number(),
+      z.string().transform((v) => (v === "" ? undefined : Number(v))),
+    ])
+    .pipe(
+      z
+        .number()
+        .positive("Maximum salary must be a positive number")
+        .optional(),
+    )
     .optional(),
   salaryCurrency: z
     .string()
     .length(3, "Use a 3-letter currency code e.g. NGN, USD")
     .default("NGN"),
-  closesAt: z.string().datetime("Invalid date format").optional(),
+  // Accept YYYY-MM-DD date strings as well as full ISO datetimes
+  closesAt: closesAtSchema,
+  // Allow the creator to start the job as active immediately
+  status: z.enum(["draft", "active"]).optional().default("draft"),
 });
 
 // Refinement applied only on create — salaryMax must be >= salaryMin

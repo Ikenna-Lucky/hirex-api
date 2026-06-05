@@ -1,11 +1,18 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { eq, and, desc, count, sql } from "drizzle-orm";
 import { db } from "../db";
-import { companies, subscriptions } from "../db/schema";
+import {
+  companies,
+  subscriptions,
+  jobs,
+  applications,
+  candidates,
+} from "../db/schema";
 import { signToken } from "../lib/jwt";
 import { requireAuth } from "../middleware/auth";
 import { registerSchema, loginSchema } from "../lib/validators/auth.validators";
+import { uploadLogo } from "../lib/cloudinary";
 
 const auth = new Hono();
 
@@ -208,6 +215,182 @@ auth.patch("/profile", requireAuth, async (c) => {
     success: true,
     message: "Profile updated",
     data: { company: updated },
+  });
+});
+
+// ─── GET /api/auth/stats ──────────────────────────────
+// Dashboard overview stats — all counts in a single round-trip.
+auth.get("/stats", requireAuth, async (c) => {
+  const { sub } = c.get("company");
+
+  // Run all queries in parallel for speed
+  const [
+    jobCountRows,
+    applicationCountRows,
+    stageCountRows,
+    recentJobs,
+    candidateCountRows,
+    pendingScoringRows,
+  ] = await Promise.all([
+    // Jobs by status
+    db
+      .select({ status: jobs.status, count: count() })
+      .from(jobs)
+      .where(eq(jobs.companyId, sub))
+      .groupBy(jobs.status),
+
+    // Total applications across all company jobs
+    db
+      .select({ total: count() })
+      .from(applications)
+      .innerJoin(jobs, eq(applications.jobId, jobs.id))
+      .where(eq(jobs.companyId, sub)),
+
+    // Applications broken down by stage
+    db
+      .select({ stage: applications.stage, count: count() })
+      .from(applications)
+      .innerJoin(jobs, eq(applications.jobId, jobs.id))
+      .where(eq(jobs.companyId, sub))
+      .groupBy(applications.stage),
+
+    // Most recent 5 jobs with their application counts
+    db
+      .select({
+        id: jobs.id,
+        title: jobs.title,
+        status: jobs.status,
+        type: jobs.type,
+        location: jobs.location,
+        applicationCount: jobs.applicationCount,
+        createdAt: jobs.createdAt,
+        closesAt: jobs.closesAt,
+      })
+      .from(jobs)
+      .where(eq(jobs.companyId, sub))
+      .orderBy(desc(jobs.createdAt))
+      .limit(5),
+
+    // Unique candidates who applied to this company
+    db
+      .select({ total: count(sql`DISTINCT ${applications.candidateId}`) })
+      .from(applications)
+      .innerJoin(jobs, eq(applications.jobId, jobs.id))
+      .where(eq(jobs.companyId, sub)),
+
+    // CVs awaiting AI scoring (pending or processing)
+    db
+      .select({ total: count() })
+      .from(applications)
+      .innerJoin(jobs, eq(applications.jobId, jobs.id))
+      .where(
+        and(
+          eq(jobs.companyId, sub),
+          sql`${applications.scoringStatus} IN ('pending', 'processing')`,
+        ),
+      ),
+  ]);
+
+  // Roll up job counts by status
+  const jobsByStatus = jobCountRows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = Number(r.count);
+    return acc;
+  }, {});
+
+  // Roll up application counts by stage
+  const applicationsByStage = stageCountRows.reduce<Record<string, number>>(
+    (acc, r) => {
+      acc[r.stage] = Number(r.count);
+      return acc;
+    },
+    {},
+  );
+
+  const totalJobs = jobCountRows.reduce((s, r) => s + Number(r.count), 0);
+  const totalApplications = Number(applicationCountRows[0]?.total ?? 0);
+  const totalCandidates = Number(candidateCountRows[0]?.total ?? 0);
+  const pendingScoring = Number(pendingScoringRows[0]?.total ?? 0);
+  const activeJobs = jobsByStatus["active"] ?? 0;
+  const draftJobs = jobsByStatus["draft"] ?? 0;
+  const closedJobs = jobsByStatus["closed"] ?? 0;
+  const shortlisted = applicationsByStage["shortlisted"] ?? 0;
+  const interviewed = applicationsByStage["interview"] ?? 0;
+  const offered = applicationsByStage["offer"] ?? 0;
+
+  return c.json({
+    success: true,
+    data: {
+      jobs: {
+        total: totalJobs,
+        active: activeJobs,
+        draft: draftJobs,
+        closed: closedJobs,
+      },
+      applications: {
+        total: totalApplications,
+        pendingScoring,
+        shortlisted,
+        interviewed,
+        offered,
+        byStage: applicationsByStage,
+      },
+      candidates: {
+        total: totalCandidates,
+      },
+      recentJobs,
+    },
+  });
+});
+
+// ─── POST /api/auth/profile/logo ──────────────────────
+// Upload / replace the company logo. Accepts multipart/form-data
+// with a single field named "logo" (JPEG / PNG / WebP, ≤ 5 MB).
+auth.post("/profile/logo", requireAuth, async (c) => {
+  const { sub } = c.get("company");
+
+  const formData = await c.req.parseBody();
+  const file = formData.logo;
+
+  if (!file || !(file instanceof File)) {
+    return c.json({ success: false, message: "Logo file is required" }, 400);
+  }
+
+  const ALLOWED = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
+  if (!ALLOWED.includes(file.type)) {
+    return c.json(
+      { success: false, message: "Logo must be a JPEG, PNG, or WebP image" },
+      400,
+    );
+  }
+
+  const MAX_SIZE = 5 * 1024 * 1024; // 5 MB
+  if (file.size > MAX_SIZE) {
+    return c.json({ success: false, message: "Logo must be under 5 MB" }, 400);
+  }
+
+  // Upload new logo
+  let logoUrl: string;
+
+  try {
+    const upload = await uploadLogo(file);
+    logoUrl = upload.url;
+  } catch {
+    return c.json(
+      { success: false, message: "Failed to upload logo. Please try again." },
+      500,
+    );
+  }
+
+  // Persist the new logo URL
+  await db
+    .update(companies)
+    .set({ logoUrl, updatedAt: new Date() })
+    .where(eq(companies.id, sub));
+
+  return c.json({
+    success: true,
+    message: "Logo updated successfully",
+    data: { logoUrl },
   });
 });
 

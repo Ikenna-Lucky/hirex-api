@@ -1,32 +1,49 @@
 import type { Context, Next } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, count } from "drizzle-orm";
 import { db } from "../db";
-import { subscriptions } from "../db/schema";
+import { subscriptions, jobs } from "../db/schema";
 
 /**
- * Blocks the request if the company does not have an active subscription.
+ * Free-quota job-creation gate.
+ *
+ * Rules:
+ *  • 0 jobs posted so far  → allow (free first post)
+ *  • 1+ jobs posted, no active subscription → block (FREE_QUOTA_EXHAUSTED)
+ *  • Active subscription → allow (unlimited per plan)
+ *
  * Must be used after requireAuth so c.get("company") is available.
  */
 export async function requireSubscription(c: Context, next: Next) {
   const { sub } = c.get("company");
 
-  const [subscription] = await db
-    .select({ status: subscriptions.status, plan: subscriptions.plan })
-    .from(subscriptions)
-    .where(eq(subscriptions.companyId, sub))
-    .limit(1);
+  // Run both checks in parallel
+  const [[{ total }], [subscription]] = await Promise.all([
+    db.select({ total: count() }).from(jobs).where(eq(jobs.companyId, sub)),
 
-  if (!subscription || subscription.status !== "active") {
-    return c.json(
-      {
-        success: false,
-        message:
-          "An active subscription is required to post jobs. Please upgrade your plan.",
-        code: "SUBSCRIPTION_REQUIRED",
-      },
-      403,
-    );
-  }
+    db
+      .select({ status: subscriptions.status })
+      .from(subscriptions)
+      .where(eq(subscriptions.companyId, sub))
+      .limit(1),
+  ]);
 
-  await next();
+  const jobCount = Number(total);
+  const isSubscribed = subscription?.status === "active";
+
+  // Active subscriber → unlimited
+  if (isSubscribed) return await next();
+
+  // First post ever → free pass
+  if (jobCount === 0) return await next();
+
+  // Free quota exhausted
+  return c.json(
+    {
+      success: false,
+      message:
+        "You've used your 1 free role post. Upgrade to a paid plan to post more.",
+      code: "FREE_QUOTA_EXHAUSTED",
+    },
+    403,
+  );
 }

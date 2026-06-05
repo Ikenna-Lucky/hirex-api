@@ -43,3 +43,38 @@ export async function uploadCV(file: File): Promise<UploadResult> {
 export async function deleteCV(publicId: string): Promise<void> {
   await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
 }
+
+/**
+ * Uploads a company logo (JPEG / PNG / WebP) to Cloudinary under hirex/logos/.
+ * Auto-crops to a 256×256 square centred on the subject.
+ */
+export async function uploadLogo(file: File): Promise<UploadResult> {
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const base64 = buffer.toString("base64");
+  const dataUri = `data:${file.type};base64,${base64}`;
+
+  const result = await cloudinary.uploader.upload(dataUri, {
+    folder: "hirex/logos",
+    resource_type: "image",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [
+      { width: 256, height: 256, crop: "fill", gravity: "auto" },
+    ],
+    use_filename: false,
+    unique_filename: true,
+  });
+
+  return {
+    url: result.secure_url,
+    publicId: result.public_id,
+  };
+}
+
+/**
+ * Deletes a company logo from Cloudinary by its public_id.
+ * Called before replacing an existing logo.
+ */
+export async function deleteLogo(publicId: string): Promise<void> {
+  await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+}

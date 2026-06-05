@@ -197,7 +197,7 @@ jobRoutes.post(
         salaryMin: body.salaryMin?.toString(),
         salaryMax: body.salaryMax?.toString(),
         salaryCurrency: body.salaryCurrency,
-        status: "draft",
+        status: body.status ?? "draft",
         closesAt: body.closesAt ? new Date(body.closesAt) : null,
       })
       .returning();

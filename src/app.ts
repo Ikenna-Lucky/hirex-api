@@ -21,18 +21,20 @@ app.use("*", secureHeaders());
 app.use(
   "*",
   cors({
-    origin: [
-      process.env.FRONTEND_URL || "http://localhost:3000",
-    ],
+    origin: [process.env.FRONTEND_URL || "http://localhost:3000"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
-  })
+  }),
 );
 
 // ─── Health Check ──────────────────────────────────────
 app.get("/health", (c) =>
-  c.json({ status: "ok", service: "HireX API", timestamp: new Date().toISOString() })
+  c.json({
+    status: "ok",
+    service: "HireX API",
+    timestamp: new Date().toISOString(),
+  }),
 );
 
 // ─── Routes ───────────────────────────────────────────
@@ -45,7 +47,7 @@ app.route("/webhooks", webhookRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────
 app.notFound((c) =>
-  c.json({ success: false, message: "Route not found" }, 404)
+  c.json({ success: false, message: "Route not found" }, 404),
 );
 
 // ─── Error Handler ────────────────────────────────────
@@ -53,7 +55,7 @@ app.onError((err, c) => {
   console.error(`[HireX API Error]`, err);
   return c.json(
     { success: false, message: err.message || "Internal server error" },
-    500
+    500,
   );
 });
 
