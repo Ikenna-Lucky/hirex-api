@@ -118,17 +118,19 @@ export const applications = pgTable("applications", {
   candidateId: uuid("candidate_id")
     .references(() => candidates.id, { onDelete: "cascade" })
     .notNull(),
-  cvUrl: text("cv_url").notNull(),         // Cloudinary URL
-  cvPublicId: text("cv_public_id"),        // Cloudinary public_id
+  cvUrl: text("cv_url").notNull(), // Cloudinary URL
+  cvPublicId: text("cv_public_id"), // Cloudinary public_id
   coverLetter: text("cover_letter"),
   stage: applicationStageEnum("stage").default("applied").notNull(),
-  aiScore: integer("ai_score"),            // 0-100 score from Gemini
-  aiSummary: text("ai_summary"),           // AI-generated match summary
-  aiStrengths: text("ai_strengths"),       // JSON array of strengths
-  aiWeaknesses: text("ai_weaknesses"),     // JSON array of gaps
-  scoringStatus: scoringStatusEnum("scoring_status").default("pending").notNull(),
+  aiScore: integer("ai_score"), // 0-100 score from Gemini
+  aiSummary: text("ai_summary"), // AI-generated match summary
+  aiStrengths: text("ai_strengths"), // JSON array of strengths
+  aiWeaknesses: text("ai_weaknesses"), // JSON array of gaps
+  scoringStatus: scoringStatusEnum("scoring_status")
+    .default("pending")
+    .notNull(),
   scoredAt: timestamp("scored_at"),
-  notes: text("notes"),                    // Internal recruiter notes
+  notes: text("notes"), // Internal recruiter notes
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
