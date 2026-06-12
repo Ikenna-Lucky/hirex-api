@@ -97,6 +97,7 @@ jobRoutes.get("/public/:id", async (c) => {
       responsibilities: jobs.responsibilities,
       location: jobs.location,
       type: jobs.type,
+      status: jobs.status,
       salaryMin: jobs.salaryMin,
       salaryMax: jobs.salaryMax,
       salaryCurrency: jobs.salaryCurrency,
