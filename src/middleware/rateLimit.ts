@@ -2,15 +2,22 @@ import type { MiddlewareHandler } from "hono";
 import Redis from "ioredis";
 import { config } from "../lib/config";
 
-const redis = new Redis(config.redis.url, {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-  lazyConnect: true,
-});
+// Lazy singleton — created on first request so test mocks are in place before instantiation
+let redis: Redis | null = null;
 
-redis.on("error", (err) => {
-  console.error("[RateLimit] Redis error:", err.message);
-});
+function getRedis(): Redis {
+  if (!redis) {
+    redis = new Redis(config.redis.url, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true,
+    });
+    redis.on("error", (err) => {
+      console.error("[RateLimit] Redis error:", err.message);
+    });
+  }
+  return redis;
+}
 
 interface RateLimitOptions {
   windowMs: number;
@@ -36,9 +43,10 @@ export function rateLimit(options: RateLimitOptions): MiddlewareHandler {
     const key = `rl:${c.req.routePath}:${ip}`;
 
     try {
-      const current = await redis.incr(key);
+      const r = getRedis();
+      const current = await r.incr(key);
       if (current === 1) {
-        await redis.expire(key, windowSecs);
+        await r.expire(key, windowSecs);
       }
 
       c.header("X-RateLimit-Limit", String(max));
