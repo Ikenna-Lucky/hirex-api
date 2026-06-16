@@ -4,13 +4,13 @@ import { logger } from "hono/logger";
 import { prettyJSON } from "hono/pretty-json";
 import { secureHeaders } from "hono/secure-headers";
 
-// Route imports (to be wired up as each module is built)
 import authRoutes from "./routes/auth";
 import jobRoutes from "./routes/jobs";
 import applicationRoutes from "./routes/applications";
 import candidateRoutes from "./routes/candidates";
 import subscriptionRoutes from "./routes/subscriptions";
 import webhookRoutes from "./routes/webhooks";
+import { authLimiter, publicLimiter, apiLimiter } from "./middleware/rateLimit";
 
 const app = new Hono().basePath("/api");
 
@@ -38,6 +38,11 @@ app.get("/health", (c) =>
 );
 
 // ─── Routes ───────────────────────────────────────────
+app.use("/auth/*", authLimiter);
+app.use("/jobs/public/*", publicLimiter);
+app.use("/applications/*", publicLimiter);
+app.use("*", apiLimiter);
+
 app.route("/auth", authRoutes);
 app.route("/jobs", jobRoutes);
 app.route("/applications", applicationRoutes);
