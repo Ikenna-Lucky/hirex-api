@@ -1,4 +1,5 @@
 import type { Context, Next } from "hono";
+import { getCookie } from "hono/cookie";
 import { verifyToken } from "../lib/jwt";
 import type { JwtPayload } from "../types";
 
@@ -10,16 +11,19 @@ declare module "hono" {
 }
 
 export async function requireAuth(c: Context, next: Next) {
+  // Prefer httpOnly cookie — fall back to Authorization header for non-browser clients
+  const cookieToken = getCookie(c, "accessToken");
   const authHeader = c.req.header("Authorization");
+  const token =
+    cookieToken ||
+    (authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null);
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (!token) {
     return c.json(
       { success: false, message: "Unauthorised — no token provided" },
       401,
     );
   }
-
-  const token = authHeader.slice(7);
 
   try {
     const payload = await verifyToken(token);
