@@ -9,10 +9,15 @@ import {
   applications,
   candidates,
 } from "../db/schema";
-import { signToken } from "../lib/jwt";
+import {
+  signToken,
+  generateRefreshToken,
+  refreshTokenExpiresAt,
+} from "../lib/jwt";
 import { requireAuth } from "../middleware/auth";
 import { registerSchema, loginSchema } from "../lib/validators/auth.validators";
 import { uploadLogo } from "../lib/cloudinary";
+import { refreshTokens } from "../db/schema";
 
 const auth = new Hono();
 
@@ -67,18 +72,24 @@ auth.post("/register", zValidator("json", registerSchema), async (c) => {
     status: "inactive",
   });
 
-  // Issue JWT
-  const token = await signToken({
+  const accessToken = await signToken({
     sub: company.id,
     email: company.email,
     name: company.name,
+  });
+
+  const refreshToken = generateRefreshToken();
+  await db.insert(refreshTokens).values({
+    companyId: company.id,
+    token: refreshToken,
+    expiresAt: refreshTokenExpiresAt(),
   });
 
   return c.json(
     {
       success: true,
       message: "Account created successfully",
-      data: { company, token },
+      data: { company, token: accessToken, refreshToken },
     },
     201,
   );
@@ -115,11 +126,17 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
     );
   }
 
-  // Issue JWT
-  const token = await signToken({
+  const accessToken = await signToken({
     sub: company.id,
     email: company.email,
     name: company.name,
+  });
+
+  const refreshToken = generateRefreshToken();
+  await db.insert(refreshTokens).values({
+    companyId: company.id,
+    token: refreshToken,
+    expiresAt: refreshTokenExpiresAt(),
   });
 
   return c.json({
@@ -135,7 +152,8 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
         size: company.size,
         isVerified: company.isVerified,
       },
-      token,
+      token: accessToken,
+      refreshToken,
     },
   });
 });
@@ -394,10 +412,67 @@ auth.post("/profile/logo", requireAuth, async (c) => {
   });
 });
 
+// ─── POST /api/auth/refresh ────────────────────────────
+auth.post("/refresh", async (c) => {
+  const { refreshToken } = await c.req.json();
+
+  if (!refreshToken) {
+    return c.json({ success: false, message: "Refresh token required" }, 400);
+  }
+
+  const [stored] = await db
+    .select()
+    .from(refreshTokens)
+    .where(eq(refreshTokens.token, refreshToken))
+    .limit(1);
+
+  if (!stored || stored.expiresAt < new Date()) {
+    return c.json(
+      { success: false, message: "Invalid or expired refresh token" },
+      401,
+    );
+  }
+
+  // Rotate — delete old token and issue a new pair
+  await db.delete(refreshTokens).where(eq(refreshTokens.id, stored.id));
+
+  const [company] = await db
+    .select({ id: companies.id, email: companies.email, name: companies.name })
+    .from(companies)
+    .where(eq(companies.id, stored.companyId))
+    .limit(1);
+
+  if (!company) {
+    return c.json({ success: false, message: "Company not found" }, 401);
+  }
+
+  const newAccessToken = await signToken({
+    sub: company.id,
+    email: company.email,
+    name: company.name,
+  });
+
+  const newRefreshToken = generateRefreshToken();
+  await db.insert(refreshTokens).values({
+    companyId: company.id,
+    token: newRefreshToken,
+    expiresAt: refreshTokenExpiresAt(),
+  });
+
+  return c.json({
+    success: true,
+    data: { token: newAccessToken, refreshToken: newRefreshToken },
+  });
+});
+
 // ─── POST /api/auth/logout ─────────────────────────────
-// JWT is stateless — client drops the token. This endpoint
-// exists so the frontend has a clean endpoint to call.
-auth.post("/logout", requireAuth, (c) => {
+auth.post("/logout", requireAuth, async (c) => {
+  const { refreshToken } = await c.req.json().catch(() => ({}));
+
+  if (refreshToken) {
+    await db.delete(refreshTokens).where(eq(refreshTokens.token, refreshToken));
+  }
+
   return c.json({ success: true, message: "Logged out successfully" });
 });
 

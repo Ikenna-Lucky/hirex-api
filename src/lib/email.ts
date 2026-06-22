@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import { config } from "./config";
 import type { ApplicationStage } from "../types";
 import {
@@ -9,15 +9,7 @@ import {
   rejectedTemplate,
 } from "./emails/templates";
 
-const transporter = nodemailer.createTransport({
-  host: config.smtp.host,
-  port: config.smtp.port,
-  secure: false,
-  auth: {
-    user: config.smtp.user,
-    pass: config.smtp.pass,
-  },
-});
+const resend = new Resend(config.resend.apiKey);
 
 export interface SendEmailOptions {
   to: string;
@@ -26,8 +18,8 @@ export interface SendEmailOptions {
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
-  await transporter.sendMail({
-    from: config.smtp.from,
+  await resend.emails.send({
+    from: config.resend.from,
     to: options.to,
     subject: options.subject,
     html: options.html,
