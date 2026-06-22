@@ -54,6 +54,8 @@ export const companies = pgTable("companies", {
   location: text("location"),
   description: text("description"),
   isVerified: boolean("is_verified").default(false),
+  failedLoginAttempts: integer("failed_login_attempts").default(0).notNull(),
+  lockedUntil: timestamp("locked_until"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

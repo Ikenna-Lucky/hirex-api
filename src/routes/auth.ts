@@ -140,6 +140,20 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
     );
   }
 
+  // Check if account is locked
+  if (company.lockedUntil && company.lockedUntil > new Date()) {
+    const minutesLeft = Math.ceil(
+      (company.lockedUntil.getTime() - Date.now()) / 60000,
+    );
+    return c.json(
+      {
+        success: false,
+        message: `Account locked. Try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
+      },
+      429,
+    );
+  }
+
   // Verify password
   const isValid = await Bun.password.verify(
     body.password,
@@ -147,11 +161,33 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
   );
 
   if (!isValid) {
+    const attempts = (company.failedLoginAttempts ?? 0) + 1;
+    const locked = attempts >= 5;
+
+    await db
+      .update(companies)
+      .set({
+        failedLoginAttempts: attempts,
+        lockedUntil: locked ? new Date(Date.now() + 15 * 60 * 1000) : null,
+      })
+      .where(eq(companies.id, company.id));
+
     return c.json(
-      { success: false, message: "Invalid email or password" },
+      {
+        success: false,
+        message: locked
+          ? "Too many failed attempts. Account locked for 15 minutes."
+          : "Invalid email or password",
+      },
       401,
     );
   }
+
+  // Successful login — reset failed attempts
+  await db
+    .update(companies)
+    .set({ failedLoginAttempts: 0, lockedUntil: null })
+    .where(eq(companies.id, company.id));
 
   const accessToken = await signToken({
     sub: company.id,
