@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { setCookie, deleteCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
-import { eq, and, desc, count, sql } from "drizzle-orm";
+import { eq, and, desc, count, sql, inArray } from "drizzle-orm";
 import { db } from "../db";
 import {
   companies,
@@ -9,6 +9,7 @@ import {
   jobs,
   applications,
   candidates,
+  stageHistory,
 } from "../db/schema";
 import {
   signToken,
@@ -526,6 +527,89 @@ auth.post("/refresh", async (c) => {
   setAuthCookies(c, newAccessToken, newRefreshToken);
 
   return c.json({ success: true, data: {} });
+});
+
+// ─── DELETE /api/auth/account ─────────────────────────
+// NDPR compliance — permanently deletes all company data.
+// Requires password confirmation so this can't be triggered accidentally.
+auth.delete("/account", requireAuth, async (c) => {
+  const { sub } = c.get("company");
+  const body = await c.req.json().catch(() => ({}));
+
+  if (!body.password || typeof body.password !== "string") {
+    return c.json(
+      {
+        success: false,
+        message: "Password is required to delete your account",
+      },
+      400,
+    );
+  }
+
+  // Verify password before deleting anything
+  const [company] = await db
+    .select({ id: companies.id, passwordHash: companies.passwordHash })
+    .from(companies)
+    .where(eq(companies.id, sub))
+    .limit(1);
+
+  if (!company) {
+    return c.json({ success: false, message: "Account not found" }, 404);
+  }
+
+  const isValid = await Bun.password.verify(
+    body.password,
+    company.passwordHash,
+  );
+  if (!isValid) {
+    return c.json({ success: false, message: "Incorrect password" }, 401);
+  }
+
+  // Get all job IDs belonging to this company so we can cascade-delete properly
+  const companyJobs = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(eq(jobs.companyId, sub));
+
+  const jobIds = companyJobs.map((j) => j.id);
+
+  if (jobIds.length > 0) {
+    // Get all application IDs under those jobs
+    const companyApplications = await db
+      .select({ id: applications.id })
+      .from(applications)
+      .where(inArray(applications.jobId, jobIds));
+
+    const applicationIds = companyApplications.map((a) => a.id);
+
+    // Delete stage history first (references applications)
+    if (applicationIds.length > 0) {
+      await db
+        .delete(stageHistory)
+        .where(inArray(stageHistory.applicationId, applicationIds));
+    }
+
+    // Delete all applications under this company's jobs
+    await db.delete(applications).where(inArray(applications.jobId, jobIds));
+
+    // Delete all jobs
+    await db.delete(jobs).where(eq(jobs.companyId, sub));
+  }
+
+  // Delete subscription, refresh tokens, then the company itself
+  await db.delete(subscriptions).where(eq(subscriptions.companyId, sub));
+  await db.delete(refreshTokens).where(eq(refreshTokens.companyId, sub));
+  await db.delete(companies).where(eq(companies.id, sub));
+
+  // Clear auth cookies — the account no longer exists
+  deleteCookie(c, "accessToken", { path: "/" });
+  deleteCookie(c, "refreshToken", { path: "/" });
+
+  return c.json({
+    success: true,
+    message:
+      "Your account and all associated data have been permanently deleted.",
+  });
 });
 
 // ─── POST /api/auth/logout ─────────────────────────────
