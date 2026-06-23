@@ -73,6 +73,8 @@ export const subscriptions = pgTable(
     status: subscriptionStatusEnum("status").default("inactive").notNull(),
     paystackCustomerCode: text("paystack_customer_code"),
     paystackSubscriptionCode: text("paystack_subscription_code"),
+    // Stored on initialize, cleared on activation — prevents duplicate checkout sessions
+    pendingReference: text("pending_reference"),
     currentPeriodStart: timestamp("current_period_start"),
     currentPeriodEnd: timestamp("current_period_end"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

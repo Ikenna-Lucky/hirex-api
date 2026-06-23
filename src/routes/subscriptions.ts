@@ -94,13 +94,17 @@ subscriptionRoutes.post(
     const { sub, email } = c.get("company");
     const { plan } = c.req.valid("json");
 
-    // Check if already active on a plan
     const [existing] = await db
-      .select({ status: subscriptions.status, plan: subscriptions.plan })
+      .select({
+        status: subscriptions.status,
+        plan: subscriptions.plan,
+        pendingReference: subscriptions.pendingReference,
+      })
       .from(subscriptions)
       .where(eq(subscriptions.companyId, sub))
       .limit(1);
 
+    // Already active on this plan — nothing to do
     if (existing?.status === "active" && existing.plan === plan) {
       return c.json(
         { success: false, message: `You are already on the ${plan} plan` },
@@ -108,7 +112,52 @@ subscriptionRoutes.post(
       );
     }
 
-    const result = await initializeTransaction(email, plan as PlanKey, sub);
+    // If there is already a pending (incomplete) checkout session for the same
+    // plan, verify its status with Paystack before creating a new one.
+    // This handles double-clicks and browser back-button retries.
+    if (existing?.pendingReference) {
+      try {
+        const tx = await verifyTransaction(existing.pendingReference);
+        if (tx.status !== "success" && tx.plan === plan) {
+          // Transaction still open — reuse the existing authorization URL
+          const reInit = await initializeTransaction(
+            email,
+            plan as PlanKey,
+            sub,
+            // Same idempotency key → Paystack returns the same session
+            `hirex-init-${sub}-${plan}-${existing.pendingReference}`,
+          );
+          return c.json({
+            success: true,
+            message: "Resuming existing payment session",
+            data: {
+              authorizationUrl: reInit.authorizationUrl,
+              reference: existing.pendingReference,
+            },
+          });
+        }
+      } catch {
+        // Verification failed — old reference is stale; fall through to create a new one
+      }
+    }
+
+    // Generate a daily idempotency key: same company + plan on the same UTC day
+    // returns the same Paystack transaction, preventing duplicate charges from retries.
+    const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const idempotencyKey = `hirex-init-${sub}-${plan}-${today}`;
+
+    const result = await initializeTransaction(
+      email,
+      plan as PlanKey,
+      sub,
+      idempotencyKey,
+    );
+
+    // Persist the reference so we can detect and resume duplicate requests
+    await db
+      .update(subscriptions)
+      .set({ pendingReference: result.reference, updatedAt: new Date() })
+      .where(eq(subscriptions.companyId, sub));
 
     return c.json({
       success: true,
@@ -149,7 +198,7 @@ subscriptionRoutes.get("/verify", async (c) => {
     return c.json({ success: false, message: "Transaction mismatch" }, 403);
   }
 
-  // Activate or update subscription
+  // Activate subscription and clear the pending reference
   const now = new Date();
   const periodEnd = new Date(now);
   periodEnd.setDate(periodEnd.getDate() + 30);
@@ -160,6 +209,7 @@ subscriptionRoutes.get("/verify", async (c) => {
       status: "active",
       plan: tx.plan,
       paystackCustomerCode: tx.customerCode,
+      pendingReference: null, // payment is done — clear the idempotency guard
       currentPeriodStart: now,
       currentPeriodEnd: periodEnd,
       updatedAt: now,
