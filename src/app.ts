@@ -3,7 +3,6 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { prettyJSON } from "hono/pretty-json";
 import { secureHeaders } from "hono/secure-headers";
-import { compress } from "hono/compress";
 import { openApiSpec } from "./docs/openapi";
 
 import authRoutes from "./routes/auth";
@@ -21,7 +20,6 @@ const app = new Hono().basePath("/api");
 app.use("*", logger());
 app.use("*", prettyJSON());
 app.use("*", secureHeaders());
-app.use("*", compress());
 app.use(
   "*",
   cors({
