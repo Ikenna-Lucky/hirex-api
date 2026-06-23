@@ -3,8 +3,13 @@ import { initSentry } from "./lib/sentry";
 initSentry();
 
 import app from "./app";
+import { runMigrations } from "./db/migrate";
 
 const PORT = Number(process.env.PORT) || 3001;
+
+// Run pending migrations before accepting traffic.
+// Safe to call on every startup — already-applied migrations are skipped.
+await runMigrations();
 
 const server = Bun.serve({
   fetch: app.fetch,

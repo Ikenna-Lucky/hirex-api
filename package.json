@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio",
+    "db:generate": "bun --env-file=.env drizzle-kit generate",
+    "db:baseline": "bun --env-file=.env src/db/baseline.ts",
+    "db:migrate": "bun --env-file=.env drizzle-kit migrate",
+    "db:migrate:deploy": "bun --env-file=.env src/db/migrate.ts",
+    "db:studio": "bun --env-file=.env drizzle-kit studio",
     "db:push": "bun --env-file=.env drizzle-kit push",
     "test": "bun test src/tests --timeout 15000"
   },

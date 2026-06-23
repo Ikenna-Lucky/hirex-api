@@ -74,33 +74,39 @@ export interface InitializeTransactionResult {
 
 /**
  * Creates a Paystack payment session for a given plan.
- * Returns the authorization URL the company is redirected to.
+ * Pass idempotencyKey to prevent duplicate sessions on retries.
  */
 export async function initializeTransaction(
   email: string,
   planKey: PlanKey,
   companyId: string,
+  idempotencyKey: string,
 ): Promise<InitializeTransactionResult> {
   const plan = PLANS[planKey];
 
-  const { data } = await paystackClient.post("/transaction/initialize", {
-    email,
-    amount: plan.amountKobo,
-    currency: "NGN",
-    callback_url: `${process.env.FRONTEND_URL}/dashboard/billing`,
-    metadata: {
-      companyId,
-      plan: planKey,
-      custom_fields: [
-        { display_name: "Plan", variable_name: "plan", value: plan.name },
-        {
-          display_name: "Company ID",
-          variable_name: "company_id",
-          value: companyId,
-        },
-      ],
+  const { data } = await paystackClient.post(
+    "/transaction/initialize",
+    {
+      email,
+      amount: plan.amountKobo,
+      currency: "NGN",
+      callback_url: `${process.env.FRONTEND_URL}/dashboard/billing`,
+      metadata: {
+        companyId,
+        plan: planKey,
+        custom_fields: [
+          { display_name: "Plan", variable_name: "plan", value: plan.name },
+          {
+            display_name: "Company ID",
+            variable_name: "company_id",
+            value: companyId,
+          },
+        ],
+      },
     },
-  });
+    // Paystack honours this header for 24 hours — same key returns the same transaction
+    { headers: { "Idempotency-Key": idempotencyKey } },
+  );
 
   return {
     authorizationUrl: data.data.authorization_url,

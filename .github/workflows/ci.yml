@@ -34,13 +34,43 @@ jobs:
           CLOUDINARY_API_KEY: test
           CLOUDINARY_API_SECRET: test
 
-  # ─── Step 2: Deploy to Render (only on main branch) ────
+  # ─── Step 2: Verify migration files are committed ──────
+  # If schema.ts changed but no new file in drizzle/ was added, fail fast.
+  # This prevents schema drift reaching production without a migration file.
+  check-migrations:
+    name: Check Migration Files
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # need parent commit to diff against
+
+      - name: Fail if schema changed without a migration
+        run: |
+          SCHEMA_CHANGED=$(git diff --name-only HEAD~1 HEAD -- src/db/schema.ts | wc -l)
+          MIGRATION_ADDED=$(git diff --name-only HEAD~1 HEAD -- 'drizzle/*.sql' | wc -l)
+
+          if [ "$SCHEMA_CHANGED" -gt 0 ] && [ "$MIGRATION_ADDED" -eq 0 ]; then
+            echo "❌ src/db/schema.ts was modified but no migration file was added to drizzle/."
+            echo "   Run 'bun run db:generate', review the generated SQL, then commit it."
+            exit 1
+          fi
+
+          echo "✓ Migration check passed."
+
+  # ─── Step 3: Deploy to Render (only on main branch) ────
   deploy:
     name: Deploy to Render
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, check-migrations]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - name: Trigger Render deploy
         run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        # Note: Render runs `bun run db:migrate:deploy` as a Pre-Deploy Command
+        # (set in Render dashboard → Service → Settings → Pre-Deploy Command)
+        # before switching traffic to the new instance.
