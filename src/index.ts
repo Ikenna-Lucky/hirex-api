@@ -1,3 +1,7 @@
+// Sentry must be initialised before anything else so it can instrument all modules
+import { initSentry } from "./lib/sentry";
+initSentry();
+
 import app from "./app";
 
 const PORT = Number(process.env.PORT) || 3001;

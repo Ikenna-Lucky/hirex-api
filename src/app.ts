@@ -12,6 +12,7 @@ import candidateRoutes from "./routes/candidates";
 import subscriptionRoutes from "./routes/subscriptions";
 import webhookRoutes from "./routes/webhooks";
 import { authLimiter, publicLimiter, apiLimiter } from "./middleware/rateLimit";
+import { Sentry } from "./lib/sentry";
 
 const app = new Hono().basePath("/api");
 
@@ -68,8 +69,8 @@ app.notFound((c) =>
 
 // ─── Error Handler ────────────────────────────────────
 app.onError((err, c) => {
-  // Log full error internally but never expose stack traces to clients
   console.error(`[HireX API Error] ${err.message}`, err.stack);
+  Sentry.captureException(err);
   return c.json({ success: false, message: "Internal server error" }, 500);
 });
 
