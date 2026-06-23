@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { eq, and, desc, count, sql } from "drizzle-orm";
+import { eq, and, desc, count, sql, isNull } from "drizzle-orm";
 import { db } from "../db";
 import {
   applications,
@@ -86,7 +86,7 @@ applicationRoutes.post("/:jobId", async (c) => {
     })
     .from(jobs)
     .innerJoin(companies, eq(jobs.companyId, companies.id))
-    .where(eq(jobs.id, jobId))
+    .where(and(eq(jobs.id, jobId), isNull(jobs.deletedAt)))
     .limit(1);
 
   if (!job) {

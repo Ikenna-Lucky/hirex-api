@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { eq, and, desc, count, ilike, or } from "drizzle-orm";
+import { eq, and, desc, count, ilike, or, isNull } from "drizzle-orm";
 import { db } from "../db";
 import { jobs, companies } from "../db/schema";
 import { requireAuth } from "../middleware/auth";
@@ -22,7 +22,7 @@ jobRoutes.get("/public", async (c) => {
   const type = c.req.query("type") || "";
   const offset = (page - 1) * limit;
 
-  const filters = [eq(jobs.status, "active")];
+  const filters = [eq(jobs.status, "active"), isNull(jobs.deletedAt)];
 
   if (search) {
     filters.push(
@@ -116,7 +116,9 @@ jobRoutes.get("/public/:id", async (c) => {
     })
     .from(jobs)
     .innerJoin(companies, eq(jobs.companyId, companies.id))
-    .where(and(eq(jobs.id, id), eq(jobs.status, "active")))
+    .where(
+      and(eq(jobs.id, id), eq(jobs.status, "active"), isNull(jobs.deletedAt)),
+    )
     .limit(1);
 
   if (!job) {
@@ -141,7 +143,7 @@ jobRoutes.get("/", async (c) => {
   const status = c.req.query("status") || "";
   const offset = (page - 1) * limit;
 
-  const filters = [eq(jobs.companyId, sub)];
+  const filters = [eq(jobs.companyId, sub), isNull(jobs.deletedAt)];
   if (status) {
     filters.push(
       eq(jobs.status, status as "draft" | "active" | "closed" | "archived"),
@@ -215,7 +217,9 @@ jobRoutes.get("/:id", async (c) => {
   const [job] = await db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.id, id), eq(jobs.companyId, sub)))
+    .where(
+      and(eq(jobs.id, id), eq(jobs.companyId, sub), isNull(jobs.deletedAt)),
+    )
     .limit(1);
 
   if (!job) {
@@ -231,11 +235,12 @@ jobRoutes.patch("/:id", zValidator("json", updateJobSchema), async (c) => {
   const { id } = c.req.param();
   const body = c.req.valid("json");
 
-  // Confirm ownership
   const [existing] = await db
     .select({ id: jobs.id })
     .from(jobs)
-    .where(and(eq(jobs.id, id), eq(jobs.companyId, sub)))
+    .where(
+      and(eq(jobs.id, id), eq(jobs.companyId, sub), isNull(jobs.deletedAt)),
+    )
     .limit(1);
 
   if (!existing) {
@@ -270,7 +275,9 @@ jobRoutes.patch(
     const [existing] = await db
       .select({ id: jobs.id, status: jobs.status })
       .from(jobs)
-      .where(and(eq(jobs.id, id), eq(jobs.companyId, sub)))
+      .where(
+        and(eq(jobs.id, id), eq(jobs.companyId, sub), isNull(jobs.deletedAt)),
+      )
       .limit(1);
 
     if (!existing) {
@@ -292,33 +299,27 @@ jobRoutes.patch(
 );
 
 // ─── DELETE /api/jobs/:id ──────────────────────────────
+// Soft delete — stamps deletedAt instead of removing the row
 jobRoutes.delete("/:id", async (c) => {
   const { sub } = c.get("company");
   const { id } = c.req.param();
 
   const [existing] = await db
-    .select({ id: jobs.id, applicationCount: jobs.applicationCount })
+    .select({ id: jobs.id })
     .from(jobs)
-    .where(and(eq(jobs.id, id), eq(jobs.companyId, sub)))
+    .where(
+      and(eq(jobs.id, id), eq(jobs.companyId, sub), isNull(jobs.deletedAt)),
+    )
     .limit(1);
 
   if (!existing) {
     return c.json({ success: false, message: "Job not found" }, 404);
   }
 
-  // Prevent deleting a job that already has applications
-  if (existing.applicationCount && existing.applicationCount > 0) {
-    return c.json(
-      {
-        success: false,
-        message:
-          "This job has applications and cannot be deleted. Archive it instead.",
-      },
-      409,
-    );
-  }
-
-  await db.delete(jobs).where(eq(jobs.id, id));
+  await db
+    .update(jobs)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(eq(jobs.id, id));
 
   return c.json({ success: true, message: "Job deleted" });
 });
