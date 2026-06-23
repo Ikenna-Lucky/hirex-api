@@ -132,8 +132,8 @@ describe("POST /api/auth/register", () => {
 
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(typeof body.data.token).toBe("string");
-    expect(typeof body.data.refreshToken).toBe("string");
+    // Tokens are now set as httpOnly cookies, not returned in the body
+    expect(res.headers.get("set-cookie")).toContain("accessToken");
     expect(body.data.company.email).toBe("hr@acme.com");
   });
 
@@ -191,6 +191,8 @@ describe("POST /api/auth/login", () => {
           industry: "Technology",
           size: "1-10",
           isVerified: false,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
         },
       ],
     ];
@@ -203,8 +205,9 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(typeof body.data.token).toBe("string");
-    expect(typeof body.data.refreshToken).toBe("string");
+    // Tokens are now set as httpOnly cookies, not returned in the body
+    expect(res.headers.get("set-cookie")).toContain("accessToken");
+    expect(body.data.company.id).toBe("company-1");
   });
 
   it("returns 401 for wrong password", async () => {
@@ -214,6 +217,8 @@ describe("POST /api/auth/login", () => {
           id: "company-1",
           email: "hr@acme.com",
           passwordHash,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
         },
       ],
     ];
@@ -289,15 +294,18 @@ describe("POST /api/auth/refresh", () => {
   });
 
   it("returns 400 when refresh token is missing", async () => {
-    const res = await post("/api/auth/refresh", {});
+    // No cookie sent — route reads refreshToken from cookie only
+    const res = await app.request("/api/auth/refresh", { method: "POST" });
     expect(res.status).toBe(400);
   });
 
   it("returns 401 for an invalid refresh token", async () => {
     dbMock.selectQueue = [[]]; // token not found in DB
 
-    const res = await post("/api/auth/refresh", {
-      refreshToken: "invalid-token-xyz",
+    // Refresh token is now sent as a cookie, not in the request body
+    const res = await app.request("/api/auth/refresh", {
+      method: "POST",
+      headers: { Cookie: "refreshToken=invalid-token-xyz" },
     });
     expect(res.status).toBe(401);
   });
@@ -305,8 +313,7 @@ describe("POST /api/auth/refresh", () => {
   it("returns new tokens for a valid refresh token", async () => {
     const futureDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-    // First select: find the refresh token
-    // Second select: find the company
+    // First select: find the refresh token; second select: find the company
     dbMock.selectQueue = [
       [
         {
@@ -319,15 +326,16 @@ describe("POST /api/auth/refresh", () => {
       [{ id: "company-1", email: "hr@acme.com", name: "Acme Corp" }],
     ];
 
-    const res = await post("/api/auth/refresh", {
-      refreshToken: "valid-token",
+    const res = await app.request("/api/auth/refresh", {
+      method: "POST",
+      headers: { Cookie: "refreshToken=valid-token" },
     });
     expect(res.status).toBe(200);
 
     const body = await res.json();
     expect(body.success).toBe(true);
-    expect(typeof body.data.token).toBe("string");
-    expect(typeof body.data.refreshToken).toBe("string");
+    // New tokens are set as cookies, not returned in the body
+    expect(res.headers.get("set-cookie")).toContain("accessToken");
   });
 });
 
