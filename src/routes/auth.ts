@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { setCookie, deleteCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -20,6 +21,30 @@ import { uploadLogo } from "../lib/cloudinary";
 import { refreshTokens } from "../db/schema";
 
 const auth = new Hono();
+
+const isProd = process.env.NODE_ENV === "production";
+
+// Set both tokens as httpOnly cookies so JS cannot read them
+function setAuthCookies(
+  c: Parameters<typeof setCookie>[0],
+  accessToken: string,
+  refreshToken: string,
+) {
+  setCookie(c, "accessToken", accessToken, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "None" : "Lax",
+    maxAge: 15 * 60, // 15 minutes
+    path: "/",
+  });
+  setCookie(c, "refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "None" : "Lax",
+    maxAge: 30 * 24 * 60 * 60, // 30 days
+    path: "/",
+  });
+}
 
 // ─── POST /api/auth/register ───────────────────────────
 auth.post("/register", zValidator("json", registerSchema), async (c) => {
@@ -85,11 +110,13 @@ auth.post("/register", zValidator("json", registerSchema), async (c) => {
     expiresAt: refreshTokenExpiresAt(),
   });
 
+  setAuthCookies(c, accessToken, refreshToken);
+
   return c.json(
     {
       success: true,
       message: "Account created successfully",
-      data: { company, token: accessToken, refreshToken },
+      data: { company },
     },
     201,
   );
@@ -113,6 +140,20 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
     );
   }
 
+  // Check if account is locked
+  if (company.lockedUntil && company.lockedUntil > new Date()) {
+    const minutesLeft = Math.ceil(
+      (company.lockedUntil.getTime() - Date.now()) / 60000,
+    );
+    return c.json(
+      {
+        success: false,
+        message: `Account locked. Try again in ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
+      },
+      429,
+    );
+  }
+
   // Verify password
   const isValid = await Bun.password.verify(
     body.password,
@@ -120,11 +161,33 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
   );
 
   if (!isValid) {
+    const attempts = (company.failedLoginAttempts ?? 0) + 1;
+    const locked = attempts >= 5;
+
+    await db
+      .update(companies)
+      .set({
+        failedLoginAttempts: attempts,
+        lockedUntil: locked ? new Date(Date.now() + 15 * 60 * 1000) : null,
+      })
+      .where(eq(companies.id, company.id));
+
     return c.json(
-      { success: false, message: "Invalid email or password" },
+      {
+        success: false,
+        message: locked
+          ? "Too many failed attempts. Account locked for 15 minutes."
+          : "Invalid email or password",
+      },
       401,
     );
   }
+
+  // Successful login — reset failed attempts
+  await db
+    .update(companies)
+    .set({ failedLoginAttempts: 0, lockedUntil: null })
+    .where(eq(companies.id, company.id));
 
   const accessToken = await signToken({
     sub: company.id,
@@ -139,6 +202,8 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
     expiresAt: refreshTokenExpiresAt(),
   });
 
+  setAuthCookies(c, accessToken, refreshToken);
+
   return c.json({
     success: true,
     message: "Welcome back",
@@ -152,8 +217,6 @@ auth.post("/login", zValidator("json", loginSchema), async (c) => {
         size: company.size,
         isVerified: company.isVerified,
       },
-      token: accessToken,
-      refreshToken,
     },
   });
 });
@@ -414,7 +477,8 @@ auth.post("/profile/logo", requireAuth, async (c) => {
 
 // ─── POST /api/auth/refresh ────────────────────────────
 auth.post("/refresh", async (c) => {
-  const { refreshToken } = await c.req.json();
+  const { getCookie } = await import("hono/cookie");
+  const refreshToken = getCookie(c, "refreshToken");
 
   if (!refreshToken) {
     return c.json({ success: false, message: "Refresh token required" }, 400);
@@ -459,19 +523,23 @@ auth.post("/refresh", async (c) => {
     expiresAt: refreshTokenExpiresAt(),
   });
 
-  return c.json({
-    success: true,
-    data: { token: newAccessToken, refreshToken: newRefreshToken },
-  });
+  setAuthCookies(c, newAccessToken, newRefreshToken);
+
+  return c.json({ success: true, data: {} });
 });
 
 // ─── POST /api/auth/logout ─────────────────────────────
 auth.post("/logout", requireAuth, async (c) => {
-  const { refreshToken } = await c.req.json().catch(() => ({}));
+  const { getCookie } = await import("hono/cookie");
+  const refreshToken = getCookie(c, "refreshToken");
 
   if (refreshToken) {
     await db.delete(refreshTokens).where(eq(refreshTokens.token, refreshToken));
   }
+
+  // Clear both auth cookies
+  deleteCookie(c, "accessToken", { path: "/" });
+  deleteCookie(c, "refreshToken", { path: "/" });
 
   return c.json({ success: true, message: "Logged out successfully" });
 });

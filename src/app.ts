@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { prettyJSON } from "hono/pretty-json";
 import { secureHeaders } from "hono/secure-headers";
+import { compress } from "hono/compress";
 
 import authRoutes from "./routes/auth";
 import jobRoutes from "./routes/jobs";
@@ -11,6 +12,7 @@ import candidateRoutes from "./routes/candidates";
 import subscriptionRoutes from "./routes/subscriptions";
 import webhookRoutes from "./routes/webhooks";
 import { authLimiter, publicLimiter, apiLimiter } from "./middleware/rateLimit";
+import { Sentry } from "./lib/sentry";
 
 const app = new Hono().basePath("/api");
 
@@ -18,6 +20,7 @@ const app = new Hono().basePath("/api");
 app.use("*", logger());
 app.use("*", prettyJSON());
 app.use("*", secureHeaders());
+app.use("*", compress());
 app.use(
   "*",
   cors({
@@ -27,6 +30,15 @@ app.use(
     credentials: true,
   }),
 );
+
+// Block requests with bodies larger than 1MB
+app.use("*", async (c, next) => {
+  const contentLength = c.req.header("content-length");
+  if (contentLength && Number(contentLength) > 1_000_000) {
+    return c.json({ success: false, message: "Request body too large" }, 413);
+  }
+  await next();
+});
 
 // ─── Health Check ──────────────────────────────────────
 app.get("/health", (c) =>
@@ -57,11 +69,9 @@ app.notFound((c) =>
 
 // ─── Error Handler ────────────────────────────────────
 app.onError((err, c) => {
-  console.error(`[HireX API Error]`, err);
-  return c.json(
-    { success: false, message: err.message || "Internal server error" },
-    500,
-  );
+  console.error(`[HireX API Error] ${err.message}`, err.stack);
+  Sentry.captureException(err);
+  return c.json({ success: false, message: "Internal server error" }, 500);
 });
 
 export default app;
