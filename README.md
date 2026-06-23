@@ -1,224 +1,80 @@
-# hirex-api
+# HireX API
 
-> The core REST API for the HireX AI Recruitment Platform — built with Hono, Bun, Drizzle ORM, and PostgreSQL.
+> REST API powering the HireX AI recruitment platform — handles auth, jobs, applications, AI scoring orchestration, and subscription billing.
+
+![CI](https://github.com/YOUR_USERNAME/hirex-api/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
-## Overview
+## What It Does
 
-`hirex-api` is the backend server that powers all business logic for HireX. It handles company authentication, job management, candidate applications, AI scoring orchestration, subscription billing via Paystack, and automated candidate email notifications.
-
-Every request from the frontend passes through this server. It is the single source of truth for data, authorization, and business rules.
+`hirex-api` is the single backend for HireX. Every request from the recruiter dashboard and the public job board passes through here. It manages company accounts, job postings, candidate applications, subscription billing via Paystack, and enqueues CV scoring jobs for the AI worker to pick up asynchronously.
 
 ---
 
 ## Tech Stack
 
-| Layer        | Technology                                                                           | Purpose                                         |
-| ------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| Runtime      | [Bun](https://bun.sh)                                                                | Fast JavaScript runtime and package manager     |
-| Framework    | [Hono](https://hono.dev)                                                             | Lightweight, TypeScript-first web framework     |
-| Database     | [PostgreSQL 16](https://www.postgresql.org)                                          | Primary relational data store                   |
-| ORM          | [Drizzle ORM](https://orm.drizzle.team)                                              | Type-safe query builder and schema manager      |
-| DB Driver    | [@neondatabase/serverless](https://neon.tech)                                        | Postgres driver (works with Neon in production) |
-| Validation   | [Zod](https://zod.dev) + [@hono/zod-validator](https://github.com/honojs/middleware) | Request body validation                         |
-| Auth         | [jose](https://github.com/panva/jose)                                                | JWT signing and verification                    |
-| Passwords    | [Argon2](https://github.com/ranisalt/node-argon2)                                    | Secure password hashing                         |
-| File Storage | [Cloudinary](https://cloudinary.com)                                                 | CV uploads and company logo storage             |
-| Job Queue    | [BullMQ](https://bullmq.io) + [ioredis](https://github.com/redis/ioredis)            | Enqueues CV scoring jobs for the AI worker      |
-| Email        | [Nodemailer](https://nodemailer.com)                                                 | Transactional emails to candidates              |
-| Payments     | [Paystack](https://paystack.com) (via Axios)                                         | Subscription billing and webhook handling       |
+`Bun` · `Hono` · `TypeScript` · `PostgreSQL` · `Drizzle ORM` · `BullMQ` · `Redis` · `Cloudinary` · `Resend` · `Paystack` · `Sentry`
 
 ---
 
-## Project Structure
+## Architecture
 
 ```
-hirex-api/
-├── src/
-│   ├── index.ts                        # Entry point — starts the Bun server
-│   ├── app.ts                          # Hono app, middleware, route registration
-│   ├── db/
-│   │   ├── index.ts                    # Database connection (Drizzle + Neon)
-│   │   └── schema.ts                   # All table and enum definitions
-│   ├── middleware/
-│   │   ├── auth.ts                     # requireAuth — JWT verification
-│   │   └── requireSubscription.ts      # Billing gate for job creation
-│   ├── routes/
-│   │   ├── auth.ts                     # Register, login, profile, stats, logo
-│   │   ├── jobs.ts                     # Job CRUD + public job board
-│   │   ├── applications.ts             # Application submission + pipeline management
-│   │   ├── candidates.ts               # Candidate lookup and listing
-│   │   ├── subscriptions.ts            # Plan management and Paystack integration
-│   │   └── webhooks.ts                 # Paystack webhook event handlers
-│   ├── lib/
-│   │   ├── config.ts                   # Centralised environment variable config
-│   │   ├── jwt.ts                      # signToken / verifyToken helpers
-│   │   ├── cloudinary.ts               # uploadCV / uploadLogo helpers
-│   │   ├── email.ts                    # sendStageEmail helper
-│   │   ├── queue.ts                    # enqueueCvScoring — pushes jobs to BullMQ
-│   │   ├── paystack.ts                 # Paystack API client (initialize, verify)
-│   │   ├── emails/
-│   │   │   └── templates.ts            # HTML email templates per hiring stage
-│   │   └── validators/
-│   │       ├── auth.validators.ts      # Zod schemas for register/login
-│   │       ├── job.validators.ts       # Zod schemas for job creation/update
-│   │       └── application.validators.ts # Zod schemas for application submission
-│   └── types/
-│       └── index.ts                    # Shared TypeScript types (JwtPayload, etc.)
-├── drizzle.config.ts                   # Drizzle Kit configuration
-├── Dockerfile                          # Multi-stage production Docker build
-├── package.json
-└── tsconfig.json
+Recruiter Dashboard / Public Job Board (Next.js)
+            ↓ HTTP
+      hirex-api  (Hono / Bun)
+     ↙         ↘
+Neon DB      BullMQ (Redis)
+               ↓
+         hirex-ai-worker
+               ↓
+            Neon DB  ← results written back
 ```
 
 ---
 
-## Database Schema
+## Key Features
 
-### Tables
-
-| Table           | Description                                                          |
-| --------------- | -------------------------------------------------------------------- |
-| `companies`     | Recruiter accounts — one company per account                         |
-| `subscriptions` | One-to-one with companies — tracks plan, status, billing dates       |
-| `jobs`          | Job postings created by companies                                    |
-| `candidates`    | People who apply — identified uniquely by email                      |
-| `applications`  | Junction between a candidate and a job — holds CV URL and AI results |
-| `stage_history` | Audit log of every pipeline stage change                             |
-
-### Enums
-
-| Enum                  | Values                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------ |
-| `job_status`          | `draft` · `active` · `closed` · `archived`                                                 |
-| `application_stage`   | `applied` · `screening` · `shortlisted` · `interview` · `offer` · `rejected` · `withdrawn` |
-| `scoring_status`      | `pending` · `processing` · `completed` · `failed`                                          |
-| `subscription_status` | `active` · `inactive` · `trialing` · `cancelled`                                           |
+- **JWT auth with httpOnly cookies** — access tokens (15 min) + refresh tokens (30 days), never exposed to JavaScript
+- **Account lockout** — 5 failed login attempts locks the account for 15 minutes
+- **AI-powered CV scoring** — applications enqueued to BullMQ; scored by Gemini asynchronously
+- **7-stage hiring pipeline** — with full audit log and automated candidate email notifications per stage
+- **Subscription billing** — Paystack integration with idempotency keys to prevent double-charges
+- **Soft deletes** — jobs and applications are flagged `deleted_at`, never hard deleted
+- **NDPR compliance** — account deletion endpoint cascades all user data
+- **DB migrations on startup** — pending Drizzle migrations apply automatically before the server accepts traffic
 
 ---
 
-## API Reference
+## Prerequisites
 
-All routes are prefixed with `/api`. Protected routes require an `Authorization: Bearer <token>` header.
-
-### Authentication — `/api/auth`
-
-| Method  | Path                 | Auth | Description                                        |
-| ------- | -------------------- | ---- | -------------------------------------------------- |
-| `POST`  | `/auth/register`     | ❌   | Create a new company account                       |
-| `POST`  | `/auth/login`        | ❌   | Login and receive a JWT                            |
-| `GET`   | `/auth/me`           | ✅   | Get current company profile                        |
-| `PATCH` | `/auth/profile`      | ✅   | Update company profile fields                      |
-| `POST`  | `/auth/profile/logo` | ✅   | Upload company logo (`multipart/form-data`)        |
-| `GET`   | `/auth/stats`        | ✅   | Dashboard overview stats (all queries in parallel) |
-| `POST`  | `/auth/logout`       | ✅   | Stateless logout (client drops the token)          |
-
-### Jobs — `/api/jobs`
-
-| Method   | Path               | Auth              | Description                                      |
-| -------- | ------------------ | ----------------- | ------------------------------------------------ |
-| `GET`    | `/jobs/public`     | ❌                | Public job board with search, filter, pagination |
-| `GET`    | `/jobs/public/:id` | ❌                | Single job detail for candidates                 |
-| `GET`    | `/jobs`            | ✅                | List company's own jobs                          |
-| `POST`   | `/jobs`            | ✅ + subscription | Create a new job posting                         |
-| `GET`    | `/jobs/:id`        | ✅                | Get a single job                                 |
-| `PATCH`  | `/jobs/:id`        | ✅                | Update job details                               |
-| `PATCH`  | `/jobs/:id/status` | ✅                | Change job status (publish / close / archive)    |
-| `DELETE` | `/jobs/:id`        | ✅                | Delete a job (blocked if it has applications)    |
-
-### Applications — `/api/applications`
-
-| Method  | Path                       | Auth | Description                                                   |
-| ------- | -------------------------- | ---- | ------------------------------------------------------------- |
-| `POST`  | `/applications/:jobId`     | ❌   | Candidate submits application with CV (`multipart/form-data`) |
-| `GET`   | `/applications/job/:jobId` | ✅   | List all applications for a job (filterable by stage)         |
-| `GET`   | `/applications/:id`        | ✅   | Get a single application with full candidate + AI data        |
-| `PATCH` | `/applications/:id/stage`  | ✅   | Move candidate to a new hiring stage                          |
-| `PATCH` | `/applications/:id/notes`  | ✅   | Save internal recruiter notes                                 |
-
-### Subscriptions — `/api/subscriptions`
-
-| Method | Path                        | Auth | Description                              |
-| ------ | --------------------------- | ---- | ---------------------------------------- |
-| `GET`  | `/subscriptions/plans`      | ❌   | List all available plans and pricing     |
-| `GET`  | `/subscriptions/status`     | ✅   | Get current subscription state and quota |
-| `POST` | `/subscriptions/initialize` | ✅   | Create a Paystack payment session        |
-| `GET`  | `/subscriptions/verify`     | ✅   | Confirm payment after Paystack redirect  |
-
-### Webhooks — `/api/webhooks`
-
-| Method | Path                 | Auth | Description                            |
-| ------ | -------------------- | ---- | -------------------------------------- |
-| `POST` | `/webhooks/paystack` | HMAC | Receives and processes Paystack events |
-
-**Paystack events handled:**
-
-| Event                    | Action                                  |
-| ------------------------ | --------------------------------------- |
-| `charge.success`         | Activate subscription                   |
-| `subscription.create`    | Store subscription code, confirm period |
-| `subscription.disable`   | Mark subscription cancelled             |
-| `invoice.payment_failed` | Mark subscription inactive              |
-| `invoice.update`         | Extend current period end date          |
-
-### Health Check
-
-```
-GET /api/health
-→ { "status": "ok", "service": "HireX API", "timestamp": "..." }
-```
-
----
-
-## Middleware
-
-### `requireAuth`
-
-Reads the `Authorization: Bearer <token>` header, verifies the JWT signature and expiry, and attaches the decoded payload to the Hono context as `c.get("company")`. All downstream route handlers use `c.get("company").sub` to get the company's ID.
-
-Returns `401` if the token is missing, malformed, or expired.
-
-### `requireSubscription`
-
-Runs after `requireAuth` on `POST /api/jobs`. Enforces the free-tier quota:
-
-- **0 jobs posted** → free first post allowed
-- **1+ jobs posted, no active subscription** → `403 FREE_QUOTA_EXHAUSTED`
-- **Active subscription** → unlimited job creation
+- [Bun](https://bun.sh) ≥ 1.1
+- PostgreSQL (via Docker: `cd ../hirex-infra && make up`)
+- Redis (included above)
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-
-- [Bun](https://bun.sh) ≥ 1.1
-- PostgreSQL running (via Docker: `cd ../hirex-infra && make up`)
-- Redis running (included in the above)
-
-### Local Setup
-
 ```bash
-# Install dependencies
+git clone https://github.com/YOUR_USERNAME/hirex-api
+cd hirex-api
 bun install
-
-# Copy env template
-cp .env.example .env
-# Fill in all values in .env
-
-# Apply database schema
-bun run db:push
-
-# Start in dev mode (hot reload)
+cp .env.example .env        # fill in all values
+bun run db:generate         # generate baseline migration
+bun run db:baseline         # mark baseline as applied (existing DB only)
 bun run dev
 ```
 
-The API will be available at `http://localhost:3001`.
+API runs at `http://localhost:3001`.
 
 ---
 
 ## Environment Variables
+
+See `.env.example` for the full template. Never commit real values.
 
 | Variable                  | Required | Description                                     |
 | ------------------------- | -------- | ----------------------------------------------- |
@@ -228,81 +84,123 @@ The API will be available at `http://localhost:3001`.
 | `CLOUDINARY_CLOUD_NAME`   | ✅       | Cloudinary cloud name                           |
 | `CLOUDINARY_API_KEY`      | ✅       | Cloudinary API key                              |
 | `CLOUDINARY_API_SECRET`   | ✅       | Cloudinary API secret                           |
-| `SMTP_HOST`               | ✅       | SMTP server hostname (e.g. `smtp.gmail.com`)    |
-| `SMTP_PORT`               | ✅       | SMTP port (e.g. `587`)                          |
-| `SMTP_USER`               | ✅       | SMTP username / Gmail address                   |
-| `SMTP_PASS`               | ✅       | SMTP password / Gmail App Password              |
-| `EMAIL_FROM`              | ✅       | From address shown on emails                    |
+| `RESEND_API_KEY`          | ✅       | Resend API key for transactional emails         |
+| `EMAIL_FROM`              | ✅       | From address shown on candidate emails          |
 | `PAYSTACK_SECRET_KEY`     | ✅       | Paystack secret key                             |
 | `PAYSTACK_WEBHOOK_SECRET` | ✅       | Webhook signature verification secret           |
 | `FRONTEND_URL`            | ✅       | Frontend origin for CORS and email links        |
+| `SENTRY_DSN`              | ✅       | Sentry DSN for error monitoring                 |
 | `PORT`                    | ❌       | Server port (default: `3001`)                   |
 | `NODE_ENV`                | ❌       | `development` or `production`                   |
+
+---
+
+## Running Tests
+
+```bash
+bun run test
+```
+
+Tests use Bun's built-in test runner with mocked DB and Redis — no real connections needed.
 
 ---
 
 ## Available Scripts
 
 ```bash
-bun run dev          # Start with hot reload (bun --hot)
-bun run start        # Start in production mode
+bun run dev                 # Start with hot reload
+bun run start               # Start in production mode
+bun run test                # Run the test suite
 
-bun run db:push      # Apply schema changes directly to the database (dev)
-bun run db:generate  # Generate SQL migration files from schema changes
-bun run db:migrate   # Apply generated SQL migration files (production)
-bun run db:studio    # Open Drizzle Studio (visual database browser)
+bun run db:generate         # Generate SQL migration file from schema changes
+bun run db:baseline         # Mark baseline as applied (first-time setup on existing DB)
+bun run db:migrate          # Apply migrations via drizzle-kit CLI
+bun run db:migrate:deploy   # Programmatic runner — called automatically on startup
+bun run db:push             # Push schema directly to DB (dev only)
+bun run db:studio           # Open Drizzle Studio (visual DB browser)
 ```
 
 ---
 
-## Application Submission Flow
+## API Endpoints
 
-When a candidate submits a job application, the following happens in a single request:
+All routes are prefixed `/api`. Protected routes require auth cookies (set on login).
 
-```
-1. Validate form fields (Zod)
-2. Validate CV file (PDF only, ≤ 5 MB)
-3. Verify job is active and not past closing date
-4. Upsert candidate by email (find existing or create new)
-5. Block duplicate applications (same candidate + job)
-6. Upload CV PDF to Cloudinary
-7. Create application row in database (scoringStatus = "pending")
-8. Increment job application count
-9. Enqueue CV scoring job in BullMQ (Redis)
-10. Send confirmation email to candidate (fire and forget)
-11. Respond 201 to the candidate immediately
-```
-
-The AI scoring (step 9) runs asynchronously in `hirex-ai-worker` — the candidate never waits for it.
+| Method   | Path                        | Auth | Description                               |
+| -------- | --------------------------- | ---- | ----------------------------------------- |
+| `POST`   | `/auth/register`            | ❌   | Create company account                    |
+| `POST`   | `/auth/login`               | ❌   | Login — sets httpOnly auth cookies        |
+| `GET`    | `/auth/me`                  | ✅   | Current company profile                   |
+| `DELETE` | `/auth/account`             | ✅   | Permanently delete account + all data     |
+| `GET`    | `/jobs/public`              | ❌   | Public job board                          |
+| `POST`   | `/jobs`                     | ✅   | Create job (requires active subscription) |
+| `DELETE` | `/jobs/:id`                 | ✅   | Soft delete job                           |
+| `POST`   | `/applications/:jobId`      | ❌   | Candidate submits application + CV        |
+| `PATCH`  | `/applications/:id/stage`   | ✅   | Move candidate to new hiring stage        |
+| `GET`    | `/subscriptions/plans`      | ❌   | List plans and pricing                    |
+| `POST`   | `/subscriptions/initialize` | ✅   | Create Paystack payment session           |
+| `POST`   | `/webhooks/paystack`        | HMAC | Receive Paystack events                   |
+| `GET`    | `/health`                   | ❌   | Health check (used by UptimeRobot)        |
 
 ---
 
-## Docker
+## Deployment
 
-The API ships with a multi-stage Dockerfile optimised for production:
+Deployed to [Render](https://render.com) via GitHub Actions. On every push to `main`:
 
-```dockerfile
-# Stage 1: Install production dependencies only
-FROM oven/bun:1.1-alpine AS deps
+1. CI runs the test suite
+2. CI checks that any `schema.ts` changes include a migration file
+3. On pass, Render is triggered to deploy
+4. On startup, pending migrations are applied automatically before traffic is accepted
 
-# Stage 2: Copy deps + source, run the server
-FROM oven/bun:1.1-alpine AS runner
+See `.github/workflows/ci.yml` for the full pipeline.
+
+---
+
+## Project Structure
+
 ```
-
-```bash
-# Build the image manually
-docker build -t hirex-api .
-
-# Or use the infra orchestration (recommended)
-cd ../hirex-infra && make up
+src/
+├── index.ts                # Entry point — runs migrations, starts server
+├── app.ts                  # Hono app, middleware, route registration
+├── db/
+│   ├── index.ts            # Drizzle + postgres.js connection
+│   ├── schema.ts           # All table and enum definitions
+│   ├── migrate.ts          # Programmatic migration runner
+│   └── baseline.ts         # One-time baseline setup script
+├── middleware/
+│   ├── auth.ts             # requireAuth — JWT cookie verification
+│   └── requireSubscription.ts  # Billing gate for job creation
+├── routes/
+│   ├── auth.ts             # Auth + account management
+│   ├── jobs.ts             # Job CRUD + public board
+│   ├── applications.ts     # Application submission + pipeline
+│   ├── candidates.ts       # Candidate lookup
+│   ├── subscriptions.ts    # Plans + Paystack
+│   └── webhooks.ts         # Paystack webhook handlers
+└── lib/
+    ├── config.ts           # Centralised env config
+    ├── jwt.ts              # Token signing/verification
+    ├── cloudinary.ts       # File upload helpers
+    ├── email.ts            # Stage email sender
+    ├── queue.ts            # BullMQ enqueue helper
+    ├── paystack.ts         # Paystack API client
+    ├── sentry.ts           # Sentry initialisation
+    └── validators/         # Zod schemas per route
 ```
 
 ---
 
 ## Related Repositories
 
-| Repository                              | Description                                             |
-| --------------------------------------- | ------------------------------------------------------- |
-| [`hirex-infra`](../hirex-infra)         | Docker Compose orchestration and developer tooling      |
-| [`hirex-ai-worker`](../hirex-ai-worker) | BullMQ worker — consumes CV scoring jobs from the queue |
-| [`hirex-frontend`](../hirex-frontend)   | Next.js 14 recruiter dashboard and public job board     |
+| Repository                              | Description                                      |
+| --------------------------------------- | ------------------------------------------------ |
+| [`hirex-frontend`](../hirex-frontend)   | Next.js recruiter dashboard and public job board |
+| [`hirex-ai-worker`](../hirex-ai-worker) | BullMQ worker — CV scoring via Gemini            |
+| [`hirex-infra`](../hirex-infra)         | Docker Compose orchestration for local dev       |
+
+---
+
+## License
+
+MIT — see `LICENSE` for details.
