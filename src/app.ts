@@ -81,3 +81,30 @@ app.get("/health", (c) =>
     timestamp: new Date().toISOString(),
   }),
 );
+
+// ─── Routes ───────────────────────────────────────────
+app.use("/auth/*", authLimiter);
+app.use("/jobs/public/*", publicLimiter);
+app.use("/applications/*", publicLimiter);
+app.use("*", apiLimiter);
+
+app.route("/auth", authRoutes);
+app.route("/jobs", jobRoutes);
+app.route("/applications", applicationRoutes);
+app.route("/candidates", candidateRoutes);
+app.route("/subscriptions", subscriptionRoutes);
+app.route("/webhooks", webhookRoutes);
+
+// ─── 404 Handler ──────────────────────────────────────
+app.notFound((c) =>
+  c.json({ success: false, message: "Route not found" }, 404),
+);
+
+// ─── Error Handler ────────────────────────────────────
+app.onError((err, c) => {
+  console.error(`[HireX API Error] ${err.message}`, err.stack);
+  Sentry.captureException(err);
+  return c.json({ success: false, message: "Internal server error" }, 500);
+});
+
+export default app;
