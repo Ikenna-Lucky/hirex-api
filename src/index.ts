@@ -1,7 +1,6 @@
 // Sentry must be initialised before anything else so it can instrument all modules
 import { initSentry } from "./lib/sentry";
 initSentry();
-
 import app from "./app";
 import { runMigrations } from "./db/migrate";
 
